@@ -20,7 +20,48 @@ my $log_file=$global_config->{'log'}->{'log_file'};
 my $fh_log;
 $fh_log = NewIOFile->new(">> $log_file") or die $! if ($logging_flag);
 
-print Dumper(&console_connect("/dev/ttyu0",115200));
+my $connect_type="console";
+my $username="";
+my $password="";
+
+my ($exp, $prompt)=&connect_to_switch();
+$exp->send("disable clipaging\n");
+$exp->expect(10,$prompt);
+$exp->send("show account\n");
+my $account_data=($exp->expect(10,$prompt))[3];
+print $account_data;
+#$exp->send("show config current_config\n");
+#my $config=($exp->expect(undef,
+#				['Next Entry', sub {	my $self = shift;
+#										$self->send("a\n");
+#										exp_continue; }],
+#				$prompt
+#			))[3];
+
+sub account_data_parse{
+	my $account_data=shift;
+	fore
+}
+
+sub connect_to_switch{
+    
+	if ($connect_type eq 'console'){
+		my $exp=&console_connect("/dev/ttyu0",115200);
+		
+		my $prompt=($exp->expect(10,
+			[ qr/username:/i, sub { my $self = shift;
+		                                 $self->send("$username\n");
+		                                 exp_continue; }],
+			[ qr/password:/i, sub { my $self = shift;
+		                                 $self->send("$password\n");
+		    	                         exp_continue; }],
+		    	'#'
+		))[3];
+		$prompt=~s/[\x0a\x0d]+/\n/g;
+		my $prompt=(split("\n", $prompt))[1].'#';
+    	return ($exp, $prompt);
+	}
+}
 
 sub telnet_connect {
 
@@ -43,7 +84,9 @@ sub telnet_connect {
         die $error;
     }
 	
-	$exp->log_stdout(0);
+
+
+#	$exp->log_stdout(0);
 
 #    if ($logging_flag && $debug_flag){
 #        $exp->log_file($fh_log);
@@ -116,14 +159,23 @@ sub console_connect {
 	        $error="can't spawn $console_cmd -l $dev -s $speed";
 	        die $error;
 	    }
-		
-		$error=$exp->expect(10,'Connected');
-		$exp->hard_close();
-		die $error unless ($error eq '');
-
+	    
+	    
+		$exp->log_stdout(0);
+	    
 	    if ($logging_flag && $debug_flag){
 	        $exp->log_file($fh_log);
 	    }
+	    
+	    $error=($exp->expect(10,'Connected'))[1];
+	    
+	    unless ($error eq ''){
+		$exp->hard_close();
+		die $error
+	    }else{
+		$exp->send("\n");
+	    }
+
 	}else{
 		die "$console_cmd not support";
 	}
