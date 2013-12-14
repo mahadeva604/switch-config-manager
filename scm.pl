@@ -20,7 +20,7 @@ my $log_file=$global_config->{'log'}->{'log_file'};
 my $fh_log;
 $fh_log = NewIOFile->new(">> $log_file") or die $! if ($logging_flag);
 
-print Dumper(&console_connect("/tmp"));
+print Dumper(&console_connect("/dev/ttyu0",115200));
 
 sub telnet_connect {
 
@@ -117,13 +117,13 @@ sub console_connect {
 	        die $error;
 	    }
 		
-		$exp->log_stdout(0);
+		$error=$exp->expect(10,'Connected');
+		$exp->hard_close();
+		die $error unless ($error eq '');
 
-#    if ($logging_flag && $debug_flag){
-#        $exp->log_file($fh_log);
-#    }else{
-#	$exp->log_stdout(0);
-#    }
+	    if ($logging_flag && $debug_flag){
+	        $exp->log_file($fh_log);
+	    }
 	}else{
 		die "$console_cmd not support";
 	}
