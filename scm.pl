@@ -7,6 +7,8 @@ use Config::General;
 use Getopt::Std;
 use Data::Dumper;
 
+$SIG{'INT'} = sub {&kill_screen;};
+
 use constant TAGGED_PORT => 0;
 use constant UNTAGGED_PORT => 1;
 use constant DELETE_PORT => 2;
@@ -854,7 +856,16 @@ sub console_connect {
 	}else{
 	    $exp->send("\n");
 	}
-    }else{
+    }elsif ($basename eq 'screen'){
+	if (! ($exp=Expect->spawn("$console_cmd -S scm_connect $dev $speed"))){
+	    $error="can't spawn $console_cmd $dev $speed";
+	    die $error;
+	}
+
+	$exp->log_stdout(0) unless ($enable_stdout);
+	$exp->send("\n");
+    }
+    else{
 	die "$console_cmd not support";
     }
     return $exp;
@@ -1098,4 +1109,20 @@ sub help {
     print "Usage for ssh connect:\t\t$0 -s switch_ip[:port] -u user_name -p password\n";
     print "Usage for telnet connect:\t$0 -t switch_ip[:port] -u user_name -p password\n";
     print "Usage for console connect:\t$0 -c dev_name -l line_speed -u user_name -p password\n";
+}
+
+sub kill_screen {
+    my $basename=$console_cmd;
+    $basename=~s/.*\///;
+    if ($basename eq 'screen' and $connect_type eq 'console'){
+	foreach my $line (split("\n",`$console_cmd -ls`)){
+	    if ($line=~m/(\d+\.scm_connect)/){
+		`$console_cmd -S "$1" -X quit`;
+	    }
+	}
+    }
+}
+
+END {
+    &kill_screen();
 }
