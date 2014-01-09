@@ -46,6 +46,13 @@ my %current_switch_config;
 
 &stuff_setting($exp);
 
+if (exists $configure{'console'}){
+    unless ($connect_type eq 'console'){
+	&console_setting($exp);
+    }else{
+	print "Warning: Skip console setting up\n";
+    }
+}
 if (exists $configure{'stuff'}->{'prompt'}){
     $prompt=&prompt_setting($exp);
 }
@@ -79,8 +86,12 @@ if (exists $configure{'vlans'}){
     %vlan_data_current=&vlan_interface_setting($exp);
 }
 
-if (exists $configure{'vlans'} and exists $configure{'mgmt'}){
-    &mgmt_interface_setting($exp);
+if (exists $configure{'vlans'} and exists $options{'mgmt_ip'}){
+    if ($connect_type eq 'console'){
+	&mgmt_interface_setting($exp);
+    }else{
+	print "Warning: Skip setting up management interface\n";
+    }
 }
 
 if (exists $configure{'authen'}){
@@ -94,9 +105,18 @@ sub stuff_setting{
     my @stuff_cmd;
     push (@stuff_cmd, "disable autoconfig");
     push (@stuff_cmd, "enable password encryption");
-    push (@stuff_cmd, "config serial_port baud_rate 115200 auto_logout 15_minutes");
+    push (@stuff_cmd, "enable password_recovery") if ($model=~m/^DES-3[25]/);
     push (@stuff_cmd, "disable cpu_interface_filtering");
     &send_config_cmd_bulk($exp,10,\@stuff_cmd,$prompt);
+}
+
+sub console_setting{
+    my $exp=shift;
+    my $console_speed=$configure{'console'}->{'speed'};
+    my $auto_logout=$configure{'console'}->{'auto_logout'};
+    my @console_cmd;
+    push (@console_cmd, "config serial_port baud_rate $console_speed auto_logout ".$auto_logout."_minutes");
+    &send_config_cmd_bulk($exp,10,\@console_cmd,$prompt);
 }
 
 sub prompt_setting{
@@ -522,9 +542,9 @@ sub vlan_interface_setting {
 
 sub mgmt_interface_setting {
     my $exp=shift;
-    my $ipaddr=$configure{'mgmt'}->{'ipaddr'};
-    my $vlan_id=$configure{'mgmt'}->{'vlan_id'};
-    my $default_route=$configure{'mgmt'}->{'default_route'};
+    my $ipaddr=$options{'mgmt_ip'};
+    my $vlan_id=$options{'mgmt_vlan'};
+    my $default_route=$options{'mgmt_gateway'};
     my @mgmt_interface_cmd;
     unless (exists $vlan_data_current{$vlan_id}){
 	die "vlan id $vlan_id not exist on switch\n";
@@ -1007,20 +1027,30 @@ sub check_config {
             }
         }
     }
-    if (exists $config{'mgmt'}){
-	unless ($config{'mgmt'}->{'ipaddr'}=~m/^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/(?:[012]?[0-9]|3[0-2])$/){
-	    print "Config file '$conf_file' error: Uncorrected ip/mask '$config{'mgmt'}->{'ipaddr'}'\n";
+
+    if (exists $config{'console'}){
+	my %support_speed=(
+	    9600 => 1,
+	    19200 => 1,
+	    38400 => 1,
+	    115200 => 1
+	);
+	my %support_auto_logout=(
+	    2 => 1,
+	    5 => 1,
+	    10 => 1,
+	    15 => 1
+	);
+	unless (exists $support_speed{$config{'console'}->{'speed'}}){
+            print "Config file '$conf_file' error: console speed must be 9600 | 19200 | 38400 | 115200\n";
             $error_flag=1;
-	}
-	unless ($config{'mgmt'}->{'vlan_id'}=~m/^\d+$/){
-	    print "Config file '$conf_file' error: Uncorrected vlan id '$config{'mgmt'}->{'vlan_id'}'\n";
-	    $error_flag=1;
-	}
-	unless ($config{'mgmt'}->{'default_route'}=~m/^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/){
-	    print "Config file '$conf_file' error: Uncorrected default route '$config{'mgmt'}->{'default_route'}'\n";
-	    $error_flag=1;
-	}
+        }
+        unless (exists $support_auto_logout{$config{'console'}->{'auto_logout'}}){
+            print "Config file '$conf_file' error: console auto_logout must be 2 | 5| 10 | 15\n";
+            $error_flag=1;
+        }
     }
+
     if (exists $config{'authen'}){
         my %protocol_host;
         foreach my $auth_protocol (keys %{$config{'authen'}}){
@@ -1062,7 +1092,7 @@ sub check_config {
 sub read_options {
     my %options=();
     my %return_options;
-    getopts("s:t:c:l:u:p:", \%options);
+    getopts("s:t:c:l:u:p:i:v:g:", \%options);
     if (exists $options{'u'} and exists $options{'p'}){
         if (exists $options{'s'}){
             unless ($options{'s'}=~m/^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/){
@@ -1098,6 +1128,42 @@ sub read_options {
             &help();
             exit;
         }
+        
+        if (exists $options{'i'} and $options{'i'}=~m/^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/(?:[012]?[0-9]|3[0-2])$/){
+	    if (exists $options{'v'} and $options{'g'}){
+		$return_options{'mgmt_ip'}=$options{'i'};
+	    }else{
+		&help();
+        	exit;
+	    }
+	}else{
+	    &help();
+            exit;
+	}
+	
+	if (exists $options{'v'} and $options{'v'}=~m/^\d+$/){
+	    if (exists $options{'i'} and $options{'g'}){
+		$return_options{'mgmt_vlan'}=$options{'v'};
+	    }else{
+		&help();
+        	exit;
+	    }
+	}else{
+	    &help();
+            exit;
+	}
+	
+	if (exists $options{'g'} and $options{'g'}=~m/^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/){
+	    if (exists $options{'i'} and $options{'v'}){
+		$return_options{'mgmt_gateway'}=$options{'g'};
+	    }else{
+		&help();
+        	exit;
+	    }
+	}else{
+	    &help();
+            exit;
+	}
     }else{
         &help();
         exit;
@@ -1108,7 +1174,7 @@ sub read_options {
 sub help {
     print "Usage for ssh connect:\t\t$0 -s switch_ip[:port] -u user_name -p password\n";
     print "Usage for telnet connect:\t$0 -t switch_ip[:port] -u user_name -p password\n";
-    print "Usage for console connect:\t$0 -c dev_name -l line_speed -u user_name -p password\n";
+    print "Usage for console connect:\t$0 -c dev_name -l line_speed -u user_name -p password -i mgmt_ip -v mgmt_vlan -g mgmt_gateway\n";
 }
 
 sub kill_screen {
