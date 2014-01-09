@@ -482,7 +482,7 @@ sub vlan_interface_setting {
 	    $vlan_data_current{$vlan_id}->{'name'}=$vlan_name;
 	    $vlan_data{$vlan_id}->{'delete_vlan'}=1 unless (exists $vlan_data{$vlan_id});
 	}
-	if ($line=~m/^\s*Tagged\s+ports\s+:\s+(.+?)\s*$/){
+	if ($line=~m/^(?:Current\s+Tagged|Tagged)\s+[Pp]orts\s+:\s+(.+?)\s*$/){
 	    $vlan_tagged=$1;
 	    $vlan_tagged=~s/\s+//g;
 	    if ($vlan_tagged ne ''){
@@ -495,7 +495,7 @@ sub vlan_interface_setting {
 		}
 	    }
 	}
-	if ($line=~m/^\s*Untagged\s+ports\s+:\s+(.+?)\s*$/){
+	if ($line=~m/^(?:Current\s+Untagged|Untagged)\s+[Pp]orts\s+:\s+(.+?)\s*$/){
 	    $vlan_untagged=$1;
 	    $vlan_untagged=~s/\s+//g;
 	    if ($vlan_untagged ne ''){
