@@ -53,6 +53,7 @@ if (exists $configure{'console'}){
 	print "Warning: Skip console setting up\n";
     }
 }
+
 if (exists $configure{'stuff'}->{'prompt'}){
     $prompt=&prompt_setting($exp);
 }
@@ -86,7 +87,8 @@ if (exists $configure{'vlans'}){
     %vlan_data_current=&vlan_interface_setting($exp);
 }
 
-if (exists $configure{'vlans'} and exists $options{'mgmt_ip'}){
+if (exists $configure{'vlans'} and exists $configure{'mgmt'}
+    and (exists $options{'mgmt_ip'} or exists $configure{'mgmt'}->{'ipaddr'})){
     if ($connect_type eq 'console'){
 	&mgmt_interface_setting($exp);
     }else{
@@ -542,9 +544,11 @@ sub vlan_interface_setting {
 
 sub mgmt_interface_setting {
     my $exp=shift;
-    my $ipaddr=$options{'mgmt_ip'};
-    my $vlan_id=$options{'mgmt_vlan'};
-    my $default_route=$options{'mgmt_gateway'};
+    my $ipaddr=exists $options{'mgmt_ip'} ? $options{'mgmt_ip'} : $configure{'mgmt'}->{'ipaddr'};
+    my $netmask=$configure{'mgmt'}->{'netmask'};
+    $ipaddr.="/$netmask";
+    my $vlan_id=$configure{'mgmt'}->{'vlan'};
+    my $default_route=$configure{'mgmt'}->{'default_route'};
     my @mgmt_interface_cmd;
     unless (exists $vlan_data_current{$vlan_id}){
 	die "vlan id $vlan_id not exist on switch\n";
@@ -1051,6 +1055,27 @@ sub check_config {
         }
     }
 
+    if (exists $config{'mgmt'}){
+	if (exists $config{'mgmt'}->{'ipaddr'}){
+	    unless ($config{'mgmt'}->{'ipaddr'}=~m/^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/){
+		print "Config file '$conf_file' error: Uncorrected ip/mask '$config{'mgmt'}->{'ipaddr'}'\n";
+		$error_flag=1;
+	    }
+	}
+	unless ($config{'mgmt'}->{'netmask'}=~m/^(?:[012]?[0-9]|3[0-2])$/){
+	    print "Config file '$conf_file' error: Uncorrected netmask '$config{'mgmt'}->{'netmask'}'\n";
+	    $error_flag=1;
+	}
+	unless ($config{'mgmt'}->{'vlan_id'}=~m/^\d+$/){
+	    print "Config file '$conf_file' error: Uncorrected vlan id '$config{'mgmt'}->{'vlan_id'}'\n";
+	    $error_flag=1;
+	}
+	unless ($config{'mgmt'}->{'default_route'}=~m/^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/){
+	    print "Config file '$conf_file' error: Uncorrected default route '$config{'mgmt'}->{'default_route'}'\n";
+	    $error_flag=1;
+	}
+    }
+
     if (exists $config{'authen'}){
         my %protocol_host;
         foreach my $auth_protocol (keys %{$config{'authen'}}){
@@ -1092,7 +1117,7 @@ sub check_config {
 sub read_options {
     my %options=();
     my %return_options;
-    getopts("s:t:c:l:u:p:i:v:g:", \%options);
+    getopts("s:t:c:l:u:p:i:", \%options);
     if (exists $options{'u'} and exists $options{'p'}){
         if (exists $options{'s'}){
             unless ($options{'s'}=~m/^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/){
@@ -1129,40 +1154,13 @@ sub read_options {
             exit;
         }
         
-        if (exists $options{'i'} and $options{'i'}=~m/^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/(?:[012]?[0-9]|3[0-2])$/){
-	    if (exists $options{'v'} and $options{'g'}){
+        if (exists $options{'i'}){
+	    if ($options{'i'}=~m/^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/){
 		$return_options{'mgmt_ip'}=$options{'i'};
 	    }else{
 		&help();
         	exit;
 	    }
-	}else{
-	    &help();
-            exit;
-	}
-	
-	if (exists $options{'v'} and $options{'v'}=~m/^\d+$/){
-	    if (exists $options{'i'} and $options{'g'}){
-		$return_options{'mgmt_vlan'}=$options{'v'};
-	    }else{
-		&help();
-        	exit;
-	    }
-	}else{
-	    &help();
-            exit;
-	}
-	
-	if (exists $options{'g'} and $options{'g'}=~m/^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/){
-	    if (exists $options{'i'} and $options{'v'}){
-		$return_options{'mgmt_gateway'}=$options{'g'};
-	    }else{
-		&help();
-        	exit;
-	    }
-	}else{
-	    &help();
-            exit;
 	}
     }else{
         &help();
@@ -1174,7 +1172,7 @@ sub read_options {
 sub help {
     print "Usage for ssh connect:\t\t$0 -s switch_ip[:port] -u user_name -p password\n";
     print "Usage for telnet connect:\t$0 -t switch_ip[:port] -u user_name -p password\n";
-    print "Usage for console connect:\t$0 -c dev_name -l line_speed -u user_name -p password -i mgmt_ip -v mgmt_vlan -g mgmt_gateway\n";
+    print "Usage for console connect:\t$0 -c dev_name -l line_speed -u user_name -p password -i mgmt_ip\n";
 }
 
 sub kill_screen {
