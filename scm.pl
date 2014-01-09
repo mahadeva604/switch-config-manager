@@ -547,7 +547,7 @@ sub mgmt_interface_setting {
     my $ipaddr=exists $options{'mgmt_ip'} ? $options{'mgmt_ip'} : $configure{'mgmt'}->{'ipaddr'};
     my $netmask=$configure{'mgmt'}->{'netmask'};
     $ipaddr.="/$netmask";
-    my $vlan_id=$configure{'mgmt'}->{'vlan'};
+    my $vlan_id=$configure{'mgmt'}->{'vlan_id'};
     my $default_route=$configure{'mgmt'}->{'default_route'};
     my @mgmt_interface_cmd;
     unless (exists $vlan_data_current{$vlan_id}){
