@@ -345,8 +345,8 @@ sub snmp_setting {
 	}
 	next unless ($snmp_user_start_flag);
 	last if ($line=~m/^Total\s+Entries/);
-	if ($line=~m/\s*(\w+)\s+(\w+)\s+V3\s+\w+\s+\w+/){
-	    push (@snmp_cmd,"delete snmp user $1");
+	if ($line=~m/^(.+?)\s+(?:.+?)\s+V3\s+.+?\s+.+$/){
+	    &send_config_cmd($exp,10,"delete snmp user $1",$prompt);
 	}
     }
 
@@ -362,29 +362,48 @@ sub snmp_setting {
         die "Command 'show snmp view' error: $error";
     }
     $snmp_view_data=~s/[\x0a\x0d]+/\n/g;
-    my $snmp_view_start_flag=0;
-    foreach my $line (split("\n",$snmp_view_data)){
-	if ($line=~m/^[-]+/){
-	    $snmp_view_start_flag=1;
-	    next;
+
+    unless ($model=~m/^DES-35/){
+	my $snmp_view_start_flag=0;
+	foreach my $line (split("\n",$snmp_view_data)){
+	    if ($line=~m/^[-]+/){
+		$snmp_view_start_flag=1;
+		next;
+	    }
+	    next unless ($snmp_view_start_flag);
+	    last if ($line=~m/^Total\s+Entries/);
+	    if ($line=~m/\s*(\w+)\s+(.+?)\s+(Included|Excluded)/){
+		my $view_name=$1;
+		my $subtree=$2;
+		my $view_type=$3;
+		if ($snmp_view{$view_name}->{$subtree} eq $view_type){
+		    delete $snmp_view{$view_name}->{$subtree};
+		}else{
+		    push (@snmp_cmd,"delete snmp view $view_name $subtree");
+		}
+	    }
 	}
-	next unless ($snmp_view_start_flag);
-	last if ($line=~m/^Total\s+Entries/);
-	if ($line=~m/\s*(\w+)\s+(.+?)\s+(Included|Excluded)/){
-	    my $view_name=$1;
-	    my $subtree=$2;
-	    my $view_type=$3;
-	    print join("|",($view_name,$subtree,$view_type)),"\n";
-	    if ($snmp_view{$view_name}->{$subtree} eq $view_type){
-		delete $snmp_view{$view_name}->{$subtree};
-	    }else{
-		push (@snmp_cmd,"delete snmp view $view_name $subtree");
+    }else{
+	my ($view_name, $subtree, $view_type);
+	foreach my $line (split("\n",$snmp_view_data)){
+	    if ($line=~m/^View\s+Name\s+:\s+(.+)$/){
+		$view_name=$1;
+	    }elsif ($line=~m/^Subtree\s+:\s+(.+)$/){
+		$subtree=$1;
+	    }elsif ($line=~m/^View\s+Type\s+:\s+(.+)$/){
+		$view_type=$1;
+		if ($snmp_view{$view_name}->{$subtree} eq $view_type){
+		    delete $snmp_view{$view_name}->{$subtree};
+		}else{
+		    push (@snmp_cmd,"delete snmp view $view_name $subtree");
+		}
 	    }
 	}
     }
     foreach my $view_name (keys %snmp_view){
 	foreach my $subtree (keys %{$snmp_view{$view_name}}){
 	    my $view_type=$snmp_view{$view_name}->{$subtree};
+	    $view_type=~tr/[A-Z]/[a-z]/;
 	    push (@snmp_cmd,"create snmp view $view_name $subtree view_type $view_type");
 	}
     }
@@ -436,22 +455,37 @@ sub snmp_setting {
         die "Command 'show snmp community' error: $error";
     }
     $snmp_comm_data=~s/[\x0a\x0d]+/\n/g;
-    my $snmp_comm_start_flag=0;
-    foreach my $line (split("\n",$snmp_comm_data)){
-	if ($line=~m/^[-]+/){
-	    $snmp_comm_start_flag=1;
-	    next;
+    unless ($model=~m/^DES-35/){
+	my $snmp_comm_start_flag=0;
+	foreach my $line (split("\n",$snmp_comm_data)){
+	    if ($line=~m/^[-]+/){
+		$snmp_comm_start_flag=1;
+		next;
+	    }
+	    next unless ($snmp_comm_start_flag);
+	    last if ($line=~m/^Total\s+Entries/);
+	    if ($line=~m/^\s*(.+?)\s+(.+?)\s+(.+)$/){
+		my $comm_name=$1;
+		my $view_name=$2;
+		my $access_mode=$3;
+		unless (exists $snmp_comm{$comm_name} && $snmp_comm{$comm_name}->{'view_name'} eq $view_name && $snmp_comm{$comm_name}->{'mode'} eq $access_mode){
+		    push (@snmp_cmd, "delete snmp community $comm_name")
+		}else{
+		    delete ($snmp_comm{$comm_name});
+		}
+	    }
 	}
-	next unless ($snmp_comm_start_flag);
-	last if ($line=~m/^Total\s+Entries/);
-	if ($line=~m/^\s*(.+?)\s+(.+?)\s+(.+)$/){
-	    my $comm_name=$1;
-	    my $view_name=$2;
-	    my $access_mode=$3;
-	    unless (exists $snmp_comm{$comm_name} && $snmp_comm{$comm_name}->{'view_name'} eq $view_name && $snmp_comm{$comm_name}->{'mode'} eq $access_mode){
-		push (@snmp_cmd, "delete snmp community $comm_name")
-	    }else{
-		delete ($snmp_comm{$comm_name});
+    }else{
+	foreach my $line (split("\n",$snmp_comm_data)){
+	    if ($line=~m/^(.+?)\s+(.+?)\s+(N\/A|read_write|read_only)$/){
+	    	my $comm_name=$1;
+		my $view_name=$2;
+		my $access_mode=$3;
+		unless (exists $snmp_comm{$comm_name} && $snmp_comm{$comm_name}->{'view_name'} eq $view_name && $snmp_comm{$comm_name}->{'mode'} eq $access_mode){
+		    push (@snmp_cmd, "delete snmp community $comm_name")
+		}else{
+		    delete ($snmp_comm{$comm_name});
+		}
 	    }
 	}
     }
@@ -805,7 +839,7 @@ sub telnet_connect {
     ($switch_ip,$port)=split(':',$switch_ip);
     $port=23 unless ($port=~m/\d+/);
 
-    die $! unless ( -x $telnet_cmd);
+    die "$! $telnet_cmd" unless ( -x $telnet_cmd);
 
     unless (&socket_test($switch_ip, $port)){
         $error="$switch_ip port $port is down";
@@ -832,7 +866,7 @@ sub ssh_connect {
     ($switch_ip,$port)=split(':',$switch_ip);
     $port=22 unless ($port=~m/\d+/);
 
-    die $! unless ( -x $ssh_cmd);
+    die "$! $ssh_cmd" unless ( -x $ssh_cmd);
 
     unless (&socket_test($switch_ip, $port)){
         $error="$switch_ip port $port is down";
@@ -857,7 +891,7 @@ sub console_connect {
     my $speed=shift;
     my $error;
 
-    die $! unless ( -x $console_cmd);
+    die "$! $console_cmd" unless ( -x $console_cmd);
     die "$dev not symbol device" unless ( -c $dev);
     die "uncorrect speed: $speed" unless ($speed=~m/\d+/);
 
