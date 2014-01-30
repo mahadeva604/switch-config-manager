@@ -6,17 +6,18 @@ use Expect;
 use IO::Socket::INET;
 use Data::Dumper;
 
+use constant TAGGED_PORT => 0;
+use constant UNTAGGED_PORT => 1;
+use constant DELETE_PORT => 2;
+
 sub connect{
 
     my $class=shift;
     my $connection_data=shift;
 
-    print Dumper($connection_data);
-
     my $self=$connection_data;
     bless $self, $class;
 
-    
     my $connect_type=$self->{'connect_type'};
     my $error;
     if ($connect_type eq 'console'){
@@ -63,7 +64,7 @@ sub connect{
 sub telnet_connect {
     my $self=shift;
     
-    my $telnet_cmd=$self->{'telnet_cmd'};
+    my $telnet_cmd=defined $self->{'cmd'} ? $self->{'cmd'} : '/usr/bin/telnet';
     my $switch_ip=$self->{'switch_ip'};
     my ($error, $port);
     ($switch_ip,$port)=split(':',$switch_ip);
@@ -93,10 +94,9 @@ sub telnet_connect {
 sub ssh_connect {
     my $self=shift;
     
-    my $ssh_cmd=$self->{'ssh_cmd'};
+    my $ssh_cmd=defined $self->{'cmd'} ? $self->{'cmd'} : '/usr/bin/ssh';
     my $switch_ip=$self->{'switch_ip'};
     my $user_name=$self->{'username'};
-    
 
     my ($error,$port);
     ($switch_ip,$port)=split(':',$switch_ip);
@@ -128,7 +128,7 @@ sub console_connect {
     my $self=shift;
     my $error;
     
-    my $console_cmd=$self->{'console_cmd'};
+    my $console_cmd=$self->{'cmd'};
     my $dev=$self->{'dev_name'};
     my $speed=$self->{'line_speed'};
 
@@ -205,7 +205,7 @@ sub read_config{
 	$self->{'prompt'}
     ))[1,3];
     unless ($error eq ''){
-        return "Command 'show config current_config' error: $error";
+        return ("Command 'show config current_config' error: $error", undef, undef, undef, undef);
     }
     $config=$config_tmp.$config;
     $config=~s/([^\x0d])\x0a\x0d/$1/g;
@@ -226,7 +226,72 @@ sub read_config{
     $self->{'model'}=$model;
     $self->{'firmware'}=$firmware;
 
-    return undef;
+    return (undef, $vendor, $model, $firmware, sort keys %config);
+}
+
+sub get_vlan_setting {
+    my $self=shift;
+    
+    my $exp=$self->{'exp_obj'};
+    my %vlan_data_current;
+    
+    $exp->send("show vlan\n");
+    my ($error, $vlan_data)=($exp->expect(10,$self->{'prompt'}))[1,3];
+    unless ($error eq ''){
+        return ("Command 'show vlan' error: $error", undef);
+    }
+    $vlan_data=~s/[\x0a\x0d]+/\n/g;
+    my $vlan_id;
+    my $vlan_name;
+    my $vlan_tagged;
+    my $vlan_untagged;
+    foreach my $line (split("\n",$vlan_data)){
+	if ($line=~m/^\s*VID\s+:\s+(\d+)\s+VLAN\s+Name\s+:\s+(.+?)\s*$/){
+	    $vlan_id=$1;
+	    $vlan_name=$2;
+	    $vlan_data_current{$vlan_id}->{'name'}=$vlan_name;
+	}
+	if ($line=~m/^(?:Current\s+Tagged|Tagged)\s+[Pp]orts\s+:\s+(.+?)\s*$/){
+	    $vlan_tagged=$1;
+	    $vlan_tagged=~s/\s+//g;
+	    if ($vlan_tagged ne ''){
+		foreach my $port ($self->vlan_range_to_array($vlan_tagged)){
+		    $vlan_data_current{$vlan_id}->{'ports'}->{$port} = TAGGED_PORT;
+		}
+	    }
+	}
+	if ($line=~m/^(?:Current\s+Untagged|Untagged)\s+[Pp]orts\s+:\s+(.+?)\s*$/){
+	    $vlan_untagged=$1;
+	    $vlan_untagged=~s/\s+//g;
+	    if ($vlan_untagged ne ''){
+		foreach my $port ($self->vlan_range_to_array($vlan_untagged)){
+		    $vlan_data_current{$vlan_id}->{'ports'}->{$port} = UNTAGGED_PORT;
+		}
+	    }
+	}
+    }
+    $self->{'vlan_data_current'}=\%vlan_data_current;
+    
+    return (undef, %vlan_data_current);
+}
+
+# convert 1-2,5,6-8 to array (1,2,5,6,7,8)
+
+sub vlan_range_to_array{
+    my $self=shift;
+    my $range_scalar=shift;
+    my @range_array;
+    foreach my $range (split (",",$range_scalar)){
+        if ($range=~m/^(\d+)-(\d+)$/){
+            my $min=$1;
+            my $max=$2;
+            push (@range_array, ($min..$max));
+        }else{
+            push (@range_array, $range);
+        }
+    }
+    return @range_array;
 }
 
 return 1;
+
