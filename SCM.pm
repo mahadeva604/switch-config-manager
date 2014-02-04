@@ -251,20 +251,20 @@ sub get_vlan_setting {
 	    $vlan_name=$2;
 	    $vlan_data_current{$vlan_id}->{'name'}=$vlan_name;
 	}
-	if ($line=~m/^(?:Current\s+Tagged|Tagged)\s+[Pp]orts\s+:\s+(.+?)\s*$/){
+	if ($line=~m/^(?:Current\s+Tagged|Tagged)\s+[Pp]orts\s*:\s+(.+?)\s*$/){
 	    $vlan_tagged=$1;
 	    $vlan_tagged=~s/\s+//g;
 	    if ($vlan_tagged ne ''){
-		foreach my $port ($self->vlan_range_to_array($vlan_tagged)){
+		foreach my $port ($self->range_to_array($vlan_tagged)){
 		    $vlan_data_current{$vlan_id}->{'ports'}->{$port} = TAGGED_PORT;
 		}
 	    }
 	}
-	if ($line=~m/^(?:Current\s+Untagged|Untagged)\s+[Pp]orts\s+:\s+(.+?)\s*$/){
+	if ($line=~m/^(?:Current\s+Untagged|Untagged)\s+[Pp]orts\s*:\s+(.+?)\s*$/){
 	    $vlan_untagged=$1;
 	    $vlan_untagged=~s/\s+//g;
 	    if ($vlan_untagged ne ''){
-		foreach my $port ($self->vlan_range_to_array($vlan_untagged)){
+		foreach my $port ($self->range_to_array($vlan_untagged)){
 		    $vlan_data_current{$vlan_id}->{'ports'}->{$port} = UNTAGGED_PORT;
 		}
 	    }
@@ -275,9 +275,134 @@ sub get_vlan_setting {
     return (undef, %vlan_data_current);
 }
 
+sub set_vlan_setting {
+    my $self=shift;
+    my %vlan_data=@_;
+    
+    my %vlan_data_current;
+    
+    if (exists $self->{'vlan_data_current'}){
+	%vlan_data_current=%{$self->{'vlan_data_current'}};
+    }else{
+	(my $error, %vlan_data_current)=$self->get_vlan_setting();
+	return ($error, %vlan_data_current) if (defined $error);
+    }
+
+    print Dumper(%vlan_data_current);
+    print Dumper(%vlan_data);
+    
+    my @vlan_cmd_delete_port;
+    my @vlan_cmd_delete_vlan;
+    my @vlan_cmd_create_vlan;
+    my @vlan_cmd_config_vlan;
+	
+    foreach my $vlan_id (keys %vlan_data_current){
+	unless (exists $vlan_data{$vlan_id}){
+	    push (@vlan_cmd_delete_vlan, "delete vlan $vlan_data{$vlan_id}->{'name'}");
+	}
+	foreach my $port (keys %{$vlan_data_current{$vlan_id}->{'ports'}}){
+	    if (exists $vlan_data{$vlan_id}->{'ports'}->{$port}){
+		if ($vlan_data_current{$vlan_id}->{'ports'}->{$port} == $vlan_data{$vlan_id}->{'ports'}->{$port}){
+		    delete ($vlan_data{$vlan_id}->{'ports'}->{$port});
+		}
+	    }else{
+		$vlan_data{$vlan_id}->{'ports'}->{$port}=DELETE_PORT;
+	    }
+	}
+    }
+    
+    foreach my $vlan_id (keys %vlan_data){
+	my (@tagged_ports, @untagged_ports, @delete_ports);
+	foreach my $port (keys %{$vlan_data{$vlan_id}->{'ports'}}){
+	     if ($vlan_data{$vlan_id}->{'ports'}->{$port} == TAGGED_PORT){
+		push (@tagged_ports, $port);
+	    }elsif ($vlan_data{$vlan_id}->{'ports'}->{$port} == UNTAGGED_PORT){
+		push (@untagged_ports, $port);
+	    }elsif ($vlan_data{$vlan_id}->{'ports'}->{$port} == DELETE_PORT){
+		push (@delete_ports, $port);
+	    }
+	}
+	unless (exists $vlan_data_current{$vlan_id}){
+	    push (@vlan_cmd_create_vlan, "create vlan $vlan_data{$vlan_id}->{'name'} tag $vlan_id");
+	    $vlan_data_current{$vlan_id}->{'name'}=$vlan_data{$vlan_id}->{'name'};
+	}
+	push (@vlan_cmd_config_vlan, "config vlan $vlan_data_current{$vlan_id}->{'name'} add tagged ".join (",",sort {$a <=> $b} @tagged_ports)) if (@tagged_ports);
+	push (@vlan_cmd_config_vlan, "config vlan $vlan_data_current{$vlan_id}->{'name'} add untagged ".join (",",sort {$a <=> $b} @untagged_ports)) if (@untagged_ports);
+	push (@vlan_cmd_delete_port, "config vlan $vlan_data_current{$vlan_id}->{'name'} delete ".join (",",sort {$a <=> $b} @delete_ports)) if (@delete_ports);
+    }
+    my @error;
+    if (@vlan_cmd_delete_port){
+	push (@error, $self->send_config_cmd_bulk(10,\@vlan_cmd_delete_port));
+    }
+    if (@vlan_cmd_delete_vlan){
+	push (@error, $self->send_config_cmd_bulk(10,\@vlan_cmd_delete_vlan));
+    }
+    if (@vlan_cmd_create_vlan){
+	push (@error, $self->send_config_cmd_bulk(10,\@vlan_cmd_create_vlan));
+    }
+    if (@vlan_cmd_config_vlan){
+	push (@error, $self->send_config_cmd_bulk(10,\@vlan_cmd_config_vlan));
+    }
+    (my $error_get_vlan, %vlan_data_current)=$self->get_vlan_setting();
+    my $error=join("\n", grep(defined, (@error, $error_get_vlan)));
+    $error=undef if ($error eq '');
+    return ($error, %vlan_data_current);
+}
+
+sub send_config_cmd {
+    my $self=shift;
+    my $timeout=shift;
+    my $cmd=shift;
+    
+    my $exp=$self->{'exp_obj'};
+    my $prompt=$self->{'prompt'};
+    
+    $exp->send("$cmd\n");
+    my ($error, $output)=($exp->expect($timeout, $prompt))[1,3];
+    unless ($error eq ''){
+	return "'$cmd' not set error: $error";
+    }else{
+	my ($error, $result);
+	$output=~s/[\x0a\x0d]+/\n/g;
+	my @output=split("\n",$output);
+	$result=$output[$#output];
+	$result=~s/^\s+//;
+	$result=~s/\s+$//;
+	if ($result eq 'Fail'){
+	    $error=join(" ", @output[2..$#output-1]) ;
+	    carp "Error command: '$cmd'\n";
+	    carp "Error message: $error\n\n";
+	}
+    }
+    return undef;
+}
+
+sub send_config_cmd_bulk {
+    my $self=shift;
+    my $timeout=shift;
+    my $cmd_ref=shift;
+    
+    my $exp=$self->{'exp_obj'};
+    my $prompt=$self->{'prompt'};
+    
+    foreach my $cmd (@$cmd_ref){
+	print $cmd,"\n";
+#	unless(exists $self->{'current_switch_config'}->{$cmd}){
+#	    my $error=$self->send_config_cmd($timeout,$cmd);
+#	    if (defined $error){
+#		return $error;
+#	    }else{
+#		$self->{'current_switch_config'}->{$cmd}=1;
+#	    }
+#	}
+    }
+    return undef;
+}
+
+
 # convert 1-2,5,6-8 to array (1,2,5,6,7,8)
 
-sub vlan_range_to_array{
+sub range_to_array{
     my $self=shift;
     my $range_scalar=shift;
     my @range_array;
