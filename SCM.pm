@@ -58,6 +58,7 @@ sub connect{
     my @prompt=split("\n", $prompt);
     $prompt=$prompt[$#prompt].'#';
     $self->{'prompt'}=$prompt;
+    $self->send_config_cmd(10, "disable clipaging");
     return $self;
 }
 
@@ -298,7 +299,7 @@ sub set_vlan_setting {
 	
     foreach my $vlan_id (keys %vlan_data_current){
 	unless (exists $vlan_data{$vlan_id}){
-	    push (@vlan_cmd_delete_vlan, "delete vlan $vlan_data{$vlan_id}->{'name'}");
+	    push (@vlan_cmd_delete_vlan, "delete vlan $vlan_data_current{$vlan_id}->{'name'}");
 	}
 	foreach my $port (keys %{$vlan_data_current{$vlan_id}->{'ports'}}){
 	    if (exists $vlan_data{$vlan_id}->{'ports'}->{$port}){
@@ -347,6 +348,76 @@ sub set_vlan_setting {
     my $error=join("\n", grep(defined, (@error, $error_get_vlan)));
     $error=undef if ($error eq '');
     return ($error, %vlan_data_current);
+}
+
+sub get_ports_setting{
+    my $self=shift;
+
+    my $exp=$self->{'exp_obj'};
+    $exp->send("show ports\n");
+
+    my $ports_data_tmp;
+    my ($error, $ports_data)=($exp->expect(10,
+	['-re', 'Refresh\s*$', sub {	my $new_exp = shift;
+					$ports_data_tmp=$new_exp->before;
+					$new_exp->send("q\n");
+					exp_continue_timeout; }],
+	$self->{'prompt'}
+    ))[1,3];
+
+    unless ($error eq ''){
+        return ("Command 'show ports' error: $error", undef);
+    }
+    
+    $ports_data=$ports_data_tmp.$ports_data;
+    my %ports_data;
+    foreach my $line (split("\n", $ports_data)){
+	if ($line=~/^\s*(\d+)\s*(\([CF]\))?\s+(\w+)/){
+	    $ports_data{$1}=$3;
+	}
+    }
+    return (undef, %ports_data);
+}
+
+sub set_lldp_setting{
+    my $self=shift;
+    my @lldp_enabled_ports=@_;
+    
+    my %lldp_enabled_ports=map {$_ => 1} @lldp_enabled_ports;
+    my ($error, %ports_data)=$self->get_ports_setting();
+
+    return $error if (defined $error);
+	
+    my @lldp_add;
+    my @lldp_delete;
+    foreach my $port (keys %ports_data){
+	if (exists $lldp_enabled_ports{$port}){
+	    push (@lldp_add, $port);
+	}else{
+	    push (@lldp_delete, $port);
+	}
+    }
+    
+    my $system_name=$self->{'switch_ip'};
+    $system_name=~s/\./_/g;
+    
+    my @lldp_cmd_config;
+    push (@lldp_cmd_config, "enable lldp");
+    push (@lldp_cmd_config, "config lldp message_tx_interval 30");
+    push (@lldp_cmd_config, "config lldp tx_delay 2");
+    push (@lldp_cmd_config, "config lldp notification_interval 5");
+    push (@lldp_cmd_config, "config lldp message_tx_interval 30");
+    push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(keys %ports_data)." notification disable");
+    push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(@lldp_delete)." admin_status rx_only");
+    push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(keys %ports_data)." basic_tlvs port_description system_name system_description system_capabilities enable");
+    push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(keys %ports_data)." dot1_tlv_pvid enable");
+    push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(keys %ports_data)." dot3_tlvs mac_phy_configuration_status link_aggregation power_via_mdi maximum_frame_size enable");
+    push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(@lldp_add)." admin_status tx_and_rx");
+    push (@lldp_cmd_config, "config snmp system_name $system_name");
+
+    $error=$self->send_config_cmd_bulk(10,\@lldp_cmd_config);
+
+    return $error;
 }
 
 sub send_config_cmd {
@@ -416,6 +487,33 @@ sub range_to_array{
         }
     }
     return @range_array;
+}
+
+sub array_to_range{
+    my $self=shift;
+    my @array=@_;
+
+    my @range_scalar;
+    my @range_array;
+
+    foreach my $number (sort {$a <=> $b} @array){
+	if ($#range_array>=0 && $range_array[-1]->[-1] + 1 == $number){
+	    push (@{$range_array[-1]}, $number);
+	}else{
+	    push (@range_array, [$number]);
+	}
+    }
+
+    foreach my $array_ref (@range_array){
+	my @local_array=@$array_ref;
+	if ($#local_array>0){
+	    push (@range_scalar, "$local_array[0]-$local_array[-1]");
+	}else{
+	    push (@range_scalar, "$local_array[0]");
+	}
+    }
+
+    return join(",", @range_scalar);
 }
 
 return 1;
