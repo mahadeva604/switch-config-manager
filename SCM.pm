@@ -33,7 +33,7 @@ sub connect{
     
     if ($error){
 	carp $error;
-	return undef;
+	return (1, undef);
     }
 
     my $exp=$self->{'exp_obj'};
@@ -51,15 +51,15 @@ sub connect{
 	'#'
     ))[1,3];
     unless ($error eq ''){
-        carp "Can't connect to switch, error: $error";
-	return undef;
+        carp "Can't authorize on switch, error: $error";
+	return (2, undef);
     }
     $prompt=~s/[\x0a\x0d]+/\n/g;
     my @prompt=split("\n", $prompt);
     $prompt=$prompt[$#prompt].'#';
     $self->{'prompt'}=$prompt;
     $self->send_config_cmd(10, "disable clipaging");
-    return $self;
+    return (undef, $self);
 }
 
 sub telnet_connect {
@@ -135,7 +135,7 @@ sub console_connect {
 
     return "$! $console_cmd" unless (-x $console_cmd);
     return "$dev not symbol device" unless ( -c $dev);
-    die "uncorrect speed: $speed" unless ($speed=~m/\d+/);
+    return "uncorrect speed: $speed" unless ($speed=~m/\d+/);
 
     my $basename=$console_cmd;
     $basename=~s/.*\///;
@@ -191,9 +191,6 @@ sub read_config{
     
     my $exp=$self->{'exp_obj'};
     my %config;
-    my $vendor='D-LINK';
-    my $model;
-    my $firmware;
     
     $exp->send("show config current_config\n");
     
@@ -215,19 +212,51 @@ sub read_config{
 	$line=~s/^\s+//;
 	$line=~s/\W+$//;
 	next if ($line=~m/^(?:\*|show|$)/);
-	if ($line=~m/^\#/){
-	    $model=$1 if ($line=~m/^\#\s+(DES-.+?)\s+/);
-	    $firmware=$1 if ($line=~m/^\#\s+Firmware:\s+Build\s+(.+?)$/);
-	    next;
-	}
+	next if ($line=~m/^\#/);
 	$config{$line}=1;
     }
     $self->{'current_switch_config'}=\%config;
-    $self->{'vendor'}=$vendor;
-    $self->{'model'}=$model;
-    $self->{'firmware'}=$firmware;
 
-    return (undef, $vendor, $model, $firmware, sort keys %config);
+    return (undef, sort keys %config);
+}
+
+sub get_switch_info {
+    my $self=shift;
+    
+    my $exp=$self->{'exp_obj'};
+    my %switch_info;
+
+    $exp->send("show switch\n");
+    my ($error, $switch_data)=($exp->expect(10,$self->{'prompt'}))[1,3];
+    unless ($error eq ''){
+        return ("Command 'show switch' error: $error", undef);
+    }
+
+    foreach my $line (split("\n", $switch_data)){
+	if ($line=~m/^\s*Device\s+Type\s*:\s*(.+?)\s+/){
+	    $switch_info{'model'}=$1;
+	    next;
+	}
+	if ($line=~m/^\s*MAC\s+Address\s*:\s*(.+?)$/){
+	    $switch_info{'switch_mac'}=$1;
+	    next;
+	}
+	if ($line=~m/^\s*Firmware\s+Version\s*:\s*Build\s+(.+?)$/){
+	    $switch_info{'firmware_version'}=$1;
+	    next;
+	}
+	if ($line=~m/^\s*Hardware\s+Version\s*:\s*(.+?)$/){
+	    $switch_info{'hardware_version'}=$1;
+	    next;
+	}
+	if ($line=~m/^\s*System\s+Name\s*:\s*(.+?)$/){
+	    $switch_info{'system_name'}=$1;
+	    next;
+	}
+    }
+    $self->{'switch_info'}=\%switch_info;
+
+    return (undef, %switch_info);
 }
 
 sub get_vlan_setting {
@@ -360,7 +389,7 @@ sub get_ports_setting{
     my ($error, $ports_data)=($exp->expect(10,
 	['-re', 'Refresh\s*$', sub {	my $new_exp = shift;
 					$ports_data_tmp=$new_exp->before;
-					$new_exp->send("q\n");
+					$new_exp->send("q");
 					exp_continue_timeout; }],
 	$self->{'prompt'}
     ))[1,3];
@@ -387,7 +416,14 @@ sub set_lldp_setting{
     my ($error, %ports_data)=$self->get_ports_setting();
 
     return $error if (defined $error);
-	
+    
+    my %switch_info;
+    unless (defined $self->{'switch_info'}){
+	($error, %switch_info)=$self->get_switch_info();
+	return $error if (defined $error);
+    }else{
+	%switch_info=%{$self->{'switch_info'}};
+    }
     my @lldp_add;
     my @lldp_delete;
     foreach my $port (keys %ports_data){
@@ -407,14 +443,25 @@ sub set_lldp_setting{
     push (@lldp_cmd_config, "config lldp tx_delay 2");
     push (@lldp_cmd_config, "config lldp notification_interval 5");
     push (@lldp_cmd_config, "config lldp message_tx_interval 30");
-    push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(keys %ports_data)." notification disable");
-    push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(@lldp_delete)." admin_status rx_only");
-    push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(keys %ports_data)." basic_tlvs port_description system_name system_description system_capabilities enable");
-    push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(keys %ports_data)." dot1_tlv_pvid enable");
-    push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(keys %ports_data)." dot3_tlvs mac_phy_configuration_status link_aggregation power_via_mdi maximum_frame_size enable");
-    push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(@lldp_add)." admin_status tx_and_rx");
-    push (@lldp_cmd_config, "config snmp system_name $system_name");
-
+    if ($switch_info{'model'}=~m/^DES-30/){
+	foreach my $port (sort {$a <=> $b} keys %ports_data){
+	    push (@lldp_cmd_config, "config lldp ports $port notification disable");
+	    push (@lldp_cmd_config, "config lldp ports $port basic_tlvs port_description system_name system_description system_capabilities enable");
+	    push (@lldp_cmd_config, "config lldp ports $port dot1_tlv_pvid enable");
+	    push (@lldp_cmd_config, "config lldp ports $port dot3_tlvs mac_phy_configuration_status link_aggregation power_via_mdi maximum_frame_size enable");
+	}
+	map {push (@lldp_cmd_config, "config lldp ports $_ admin_status rx_only")} sort {$a <=> $b} @lldp_delete;
+	map {push (@lldp_cmd_config, "config lldp ports $_ admin_status tx_and_rx")} sort {$a <=> $b} @lldp_add;
+    }
+    else{
+	push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(keys %ports_data)." notification disable");
+	push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(@lldp_delete)." admin_status rx_only");
+	push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(keys %ports_data)." basic_tlvs port_description system_name system_description system_capabilities enable");
+	push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(keys %ports_data)." dot1_tlv_pvid enable");
+	push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(keys %ports_data)." dot3_tlvs mac_phy_configuration_status link_aggregation power_via_mdi maximum_frame_size enable");
+	push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(@lldp_add)." admin_status tx_and_rx");
+	push (@lldp_cmd_config, "config snmp system_name $system_name");
+    }
     $error=$self->send_config_cmd_bulk(10,\@lldp_cmd_config);
 
     return $error;
