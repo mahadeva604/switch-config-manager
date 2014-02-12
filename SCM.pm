@@ -4,7 +4,7 @@ use strict;
 use Carp qw(carp);
 use Expect;
 use IO::Socket::INET;
-use Data::Dumper;
+use Storable qw(dclone);
 
 use constant TAGGED_PORT => 0;
 use constant UNTAGGED_PORT => 1;
@@ -28,7 +28,7 @@ sub connect{
 	$error=$self->ssh_connect();
     }else{
 	carp "Not support connect type: $connect_type";
-	return undef;
+	return (1, undef);
     }
     
     if ($error){
@@ -51,7 +51,7 @@ sub connect{
 	'#'
     ))[1,3];
     unless ($error eq ''){
-        carp "Can't authorize on switch, error: $error";
+        carp "Can't authorize on switch $self->{'switch_ip'} connect_type $connect_type with user $self->{'username'}, error: $error";
 	return (2, undef);
     }
     $prompt=~s/[\x0a\x0d]+/\n/g;
@@ -178,7 +178,7 @@ sub socket_test {
     my $self=shift;
     my $ip=shift;
     my $port=shift;
-    if (! (my $socket=IO::Socket::INET->new(PeerAddr=> $ip, PeerPort=>"$port", Proto=>"tcp", Type=>SOCK_STREAM, Timeout=>"500"))){
+    if (! (my $socket=IO::Socket::INET->new(PeerAddr=> $ip, PeerPort=>"$port", Proto=>"tcp", Type=>SOCK_STREAM, Timeout=> 2))){
     	return 0;
     }else{
 	close ($socket);
@@ -227,11 +227,21 @@ sub get_switch_info {
     my %switch_info;
 
     $exp->send("show switch\n");
-    my ($error, $switch_data)=($exp->expect(10,$self->{'prompt'}))[1,3];
+    my $switch_data_tmp;
+    my ($error, $switch_data)=($exp->expect(10,
+	['-re', 'All\s*$', sub {	my $new_exp = shift;
+					$switch_data_tmp=$new_exp->before;
+					$new_exp->send("q");
+					exp_continue_timeout; }],
+	$self->{'prompt'}
+    ))[1,3];
+
     unless ($error eq ''){
         return ("Command 'show switch' error: $error", undef);
     }
-
+    
+    $switch_data=$switch_data_tmp.$switch_data;
+    $switch_data=~s/[\x0a\x0d]+/\n/g;
     foreach my $line (split("\n", $switch_data)){
 	if ($line=~m/^\s*Device\s+Type\s*:\s*(.+?)\s+/){
 	    $switch_info{'model'}=$1;
@@ -247,6 +257,10 @@ sub get_switch_info {
 	}
 	if ($line=~m/^\s*Hardware\s+Version\s*:\s*(.+?)$/){
 	    $switch_info{'hardware_version'}=$1;
+	    next;
+	}
+	if ($line=~m/^\s*VLAN\s+Name\s*:\s*(.+?)$/){
+	    $switch_info{'mgmt_vlan_name'}=$1;
 	    next;
 	}
 	if ($line=~m/^\s*System\s+Name\s*:\s*(.+?)$/){
@@ -266,10 +280,22 @@ sub get_vlan_setting {
     my %vlan_data_current;
     
     $exp->send("show vlan\n");
-    my ($error, $vlan_data)=($exp->expect(10,$self->{'prompt'}))[1,3];
+    my $vlan_data_tmp;
+    my ($error, $vlan_data)=($exp->expect(10,
+	['-re', 'All\s*$', sub {	my $new_exp = shift;
+					$vlan_data_tmp=$new_exp->before;
+					$new_exp->send("a");
+					exp_continue_timeout; }],
+	$self->{'prompt'}
+    ))[1,3];
+
+    
     unless ($error eq ''){
         return ("Command 'show vlan' error: $error", undef);
     }
+    
+    $vlan_data=$vlan_data_tmp.$vlan_data;
+    
     $vlan_data=~s/[\x0a\x0d]+/\n/g;
     my $vlan_id;
     my $vlan_name;
@@ -312,15 +338,12 @@ sub set_vlan_setting {
     my %vlan_data_current;
     
     if (exists $self->{'vlan_data_current'}){
-	%vlan_data_current=%{$self->{'vlan_data_current'}};
+	%vlan_data_current=%{(dclone($self->{'vlan_data_current'}))};
     }else{
 	(my $error, %vlan_data_current)=$self->get_vlan_setting();
 	return ($error, %vlan_data_current) if (defined $error);
     }
 
-    print Dumper(%vlan_data_current);
-    print Dumper(%vlan_data);
-    
     my @vlan_cmd_delete_port;
     my @vlan_cmd_delete_vlan;
     my @vlan_cmd_create_vlan;
@@ -379,32 +402,65 @@ sub set_vlan_setting {
     return ($error, %vlan_data_current);
 }
 
-sub get_ports_setting{
+# Need upgrade for this function
+
+#sub get_ports_setting{
+#    my $self=shift;
+
+#    my $exp=$self->{'exp_obj'};
+#    $exp->send("show ports\n");
+
+#    my $ports_data_tmp;
+#    my ($error, $ports_data)=($exp->expect(10,
+#	['-re', 'Refresh\s*$', sub {	my $new_exp = shift;
+#					$ports_data_tmp=$new_exp->before;
+#					$new_exp->send("q");
+#					exp_continue_timeout; }],
+#	$self->{'prompt'}
+#    ))[1,3];
+
+#    unless ($error eq ''){
+#        return ("Command 'show ports' error: $error", undef);
+#    }
+    
+#    $ports_data=$ports_data_tmp.$ports_data;
+#    my %ports_data;
+#    foreach my $line (split("\n", $ports_data)){
+#	if ($line=~/^\s*(\d+)\s*(\([CF]\))?\s+(\w+)/){
+#	    $ports_data{$1}=$3;
+#	}
+#    }
+#    return (undef, %ports_data);
+#}
+
+sub get_all_ports{
     my $self=shift;
 
     my $exp=$self->{'exp_obj'};
-    $exp->send("show ports\n");
-
+    $exp->send("show lacp_port\n");
+    
     my $ports_data_tmp;
     my ($error, $ports_data)=($exp->expect(10,
-	['-re', 'Refresh\s*$', sub {	my $new_exp = shift;
+	['-re', 'All\s*$', sub {	my $new_exp = shift;
 					$ports_data_tmp=$new_exp->before;
-					$new_exp->send("q");
+					$new_exp->send("a");
 					exp_continue_timeout; }],
 	$self->{'prompt'}
     ))[1,3];
 
     unless ($error eq ''){
-        return ("Command 'show ports' error: $error", undef);
+        return ("Command 'show lacp_port' error: $error", undef);
     }
-    
+
     $ports_data=$ports_data_tmp.$ports_data;
+    $ports_data=~s/[\x0a\x0d]+/\n/g;
     my %ports_data;
     foreach my $line (split("\n", $ports_data)){
-	if ($line=~/^\s*(\d+)\s*(\([CF]\))?\s+(\w+)/){
-	    $ports_data{$1}=$3;
+	if ($line=~/^\s*(\d+)\s+(\w+)\s*$/){
+	    $ports_data{$1}=1;
 	}
     }
+    $self->{'ports_all'}=\%ports_data;
     return (undef, %ports_data);
 }
 
@@ -413,9 +469,14 @@ sub set_lldp_setting{
     my @lldp_enabled_ports=@_;
     
     my %lldp_enabled_ports=map {$_ => 1} @lldp_enabled_ports;
-    my ($error, %ports_data)=$self->get_ports_setting();
-
-    return $error if (defined $error);
+    
+    my ($error, %ports_data);
+    unless (exists $self->{'ports_all'}){
+	($error, %ports_data)=$self->get_all_ports();
+	return $error if (defined $error);
+    }else{
+	%ports_data=%{$self->{'ports_all'}};
+    }
     
     my %switch_info;
     unless (defined $self->{'switch_info'}){
@@ -448,20 +509,19 @@ sub set_lldp_setting{
 	    push (@lldp_cmd_config, "config lldp ports $port notification disable");
 	    push (@lldp_cmd_config, "config lldp ports $port basic_tlvs port_description system_name system_description system_capabilities enable");
 	    push (@lldp_cmd_config, "config lldp ports $port dot1_tlv_pvid enable");
-	    push (@lldp_cmd_config, "config lldp ports $port dot3_tlvs mac_phy_configuration_status link_aggregation power_via_mdi maximum_frame_size enable");
+	    push (@lldp_cmd_config, "config lldp ports $port dot3_tlvs mac_phy_configuration_status link_aggregation maximum_frame_size enable");
 	}
-	map {push (@lldp_cmd_config, "config lldp ports $_ admin_status rx_only")} sort {$a <=> $b} @lldp_delete;
+	map {push (@lldp_cmd_config, "config lldp ports $_ admin_status disable")} sort {$a <=> $b} @lldp_delete;
 	map {push (@lldp_cmd_config, "config lldp ports $_ admin_status tx_and_rx")} sort {$a <=> $b} @lldp_add;
-    }
-    else{
+    }else{
 	push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(keys %ports_data)." notification disable");
 	push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(@lldp_delete)." admin_status rx_only");
 	push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(keys %ports_data)." basic_tlvs port_description system_name system_description system_capabilities enable");
 	push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(keys %ports_data)." dot1_tlv_pvid enable");
-	push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(keys %ports_data)." dot3_tlvs mac_phy_configuration_status link_aggregation power_via_mdi maximum_frame_size enable");
+	push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(keys %ports_data)." dot3_tlvs mac_phy_configuration_status link_aggregation maximum_frame_size enable");
 	push (@lldp_cmd_config, "config lldp ports ".$self->array_to_range(@lldp_add)." admin_status tx_and_rx");
-	push (@lldp_cmd_config, "config snmp system_name $system_name");
     }
+    push (@lldp_cmd_config, "config snmp system_name $system_name");
     $error=$self->send_config_cmd_bulk(10,\@lldp_cmd_config);
 
     return $error;
@@ -502,17 +562,18 @@ sub send_config_cmd_bulk {
     
     my $exp=$self->{'exp_obj'};
     my $prompt=$self->{'prompt'};
+
+    $self->read_config() unless (exists $self->{'current_switch_config'});
     
     foreach my $cmd (@$cmd_ref){
-	print $cmd,"\n";
-#	unless(exists $self->{'current_switch_config'}->{$cmd}){
-#	    my $error=$self->send_config_cmd($timeout,$cmd);
-#	    if (defined $error){
-#		return $error;
-#	    }else{
-#		$self->{'current_switch_config'}->{$cmd}=1;
-#	    }
-#	}
+	unless(exists $self->{'current_switch_config'}->{$cmd}){
+	    my $error=$self->send_config_cmd($timeout,$cmd);
+	    if (defined $error){
+		return $error;
+	    }else{
+		$self->{'current_switch_config'}->{$cmd}=1;
+	    }
+	}
     }
     return undef;
 }
