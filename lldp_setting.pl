@@ -47,6 +47,7 @@ foreach my $switch_ip (@switch_ip){
 		    'switch_ip'		=> $switch_ip,
 		    'username'		=> $user_name,
 		    'password'		=> $users{$user_name}->{'password'},
+		    'log_file'		=> \&PrintLog,
 		    'debug_enable'	=> $debug_flag
 		});
 		last if ($error==1 or defined $scm);
@@ -58,10 +59,10 @@ foreach my $switch_ip (@switch_ip){
 	    my $error;
 	    
 	    ($error, my %vlan_data_current)=$scm->get_vlan_setting();
-	    &PrintLog($log_file, "ERROR: $switch_ip get_vlan_setting() $error") && exit if (defined $error);
+	    &PrintLog("ERROR: $switch_ip get_vlan_setting() $error") && exit if (defined $error);
 	    
 	    ($error, my %switch_info)=$scm->get_switch_info();
-	    &PrintLog($log_file, "ERROR: $switch_ip get_switch_info() $error") && exit if (defined $error);
+	    &PrintLog("ERROR: $switch_ip get_switch_info() $error") && exit if (defined $error);
 
 	    my $mgmt_vlan;
 	    foreach my $vlan_id (keys %vlan_data_current){
@@ -70,14 +71,14 @@ foreach my $switch_ip (@switch_ip){
 		    last;
 		}
 	    }
-	    &PrintLog($log_file, "ERROR: $switch_ip can't find mgmt vlan $switch_info{'mgmt_vlan_name'}") && exit unless (defined $mgmt_vlan);
+	    &PrintLog("ERROR: $switch_ip can't find mgmt vlan $switch_info{'mgmt_vlan_name'}") && exit unless (defined $mgmt_vlan);
 
 	    my @ports_for_lldp;
 	    unless ($options{'all_port_flag'}){
 		@ports_for_lldp=keys %{$vlan_data_current{$mgmt_vlan}->{'ports'}}
 	    }else{
 		($error, my %ports_all)=$scm->get_all_ports();
-		&PrintLog($log_file, "ERROR: $switch_ip get_all_ports() $error") && exit if (defined $error);
+		&PrintLog("ERROR: $switch_ip get_all_ports() $error") && exit if (defined $error);
 		@ports_for_lldp=keys %ports_all;
 	    }
 
@@ -85,18 +86,18 @@ foreach my $switch_ip (@switch_ip){
 
 	    unless (Compare(\%vlan_data_current,\%vlan_data_new)){
 		($error, my %vlan_data_after_setting)=$scm->set_vlan_setting(%vlan_data_new);
-		&PrintLog($log_file, "ERROR: $switch_ip vlans not setting up") && exit unless(Compare(\%vlan_data_after_setting,\%vlan_data_new));
+		&PrintLog("ERROR: $switch_ip vlans not setting up") && exit unless(Compare(\%vlan_data_after_setting,\%vlan_data_new));
 	    }
 
 	    $error=$scm->set_lldp_setting(@ports_for_lldp);
-	    &PrintLog($log_file, "ERROR: $switch_ip set_lldp_setting() $error") && exit if (defined $error);
+	    &PrintLog("ERROR: $switch_ip set_lldp_setting() $error") && exit if (defined $error);
 	    
 	    $error=$scm->send_config_cmd(60,"save");
 	    &PrintLog("ERROR: $switch_ip $error") && exit if (defined $error);
 	}else{
-	    &PrintLog($log_file, "ERROR: $switch_ip Can't connect to switch") && exit;
+	    &PrintLog("ERROR: $switch_ip Can't connect to switch") && exit;
 	}
-	&PrintLog($log_file, "OK: $switch_ip lldp setting up") && exit;
+	&PrintLog("OK: $switch_ip lldp setting up") && exit;
     }
 
     while (scalar(keys %pids) >= $fork_number){
@@ -147,12 +148,14 @@ sub net_to_host_array {
 }
 
 sub PrintLog {
-    my $log_file=shift;
     my $text=shift;
     sysopen(LOG_FILE,$log_file,O_APPEND | O_WRONLY | O_CREAT) or return 1;
     flock (LOG_FILE, LOCK_EX);
     my $date=scalar localtime;
-    print LOG_FILE "$date\t$text\n";
+    $text=~s/[\x0a\x0d]+/\n/g;
+    foreach my $line (split ("\n", $text)){
+	print LOG_FILE "$date\t$$\t$line\n";
+    }
     close LOG_FILE;
     return 1;
 }

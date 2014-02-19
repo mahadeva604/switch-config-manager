@@ -83,9 +83,10 @@ sub telnet_connect {
     if (! ($exp=Expect->spawn("$telnet_cmd -N $switch_ip $port"))){
         $error="can't spawn $telnet_cmd -N $switch_ip $port";
         return $error;
-}
+    }
 
-    $exp->log_stdout(0) unless ($self->{'debug_enable'});
+    $exp->log_stdout(0);
+    $exp->log_file($self->{'log_file'}) if ($self->{'debug_enable'} == 1);
 
     $self->{'exp_obj'}=$exp;
 
@@ -117,8 +118,9 @@ sub ssh_connect {
         return $error;
     }
 
-    $exp->log_stdout(0) unless ($self->{'debug_enable'});
-    
+    $exp->log_stdout(0);
+    $exp->log_file($self->{'log_file'}) if ($self->{'debug_enable'} == 1);
+
     $self->{'exp_obj'}=$exp;
 
     return undef;
@@ -147,8 +149,9 @@ sub console_connect {
 	    return $error;
 	}
 
-	$exp->log_stdout(0) unless ($self->{'debug_enable'});
-	    
+	$exp->log_stdout(0);
+	$exp->log_file($self->{'log_file'}) if ($self->{'debug_enable'} == 1);
+
 	$error=($exp->expect(10,'Connected'))[1];
 	    
 	unless ($error eq ''){
@@ -162,7 +165,9 @@ sub console_connect {
 	    return $error;
 	}
 
-	$exp->log_stdout(0) unless ($self->{'debug_enable'});
+	$exp->log_stdout(0);
+	$exp->log_file($self->{'log_file'}) if ($self->{'debug_enable'} == 1);
+
 	$exp->send("\n");
     }
     else{
@@ -211,12 +216,13 @@ sub read_config{
     foreach my $line (split ("\n", $config)){
 	$line=~s/^\s+//;
 	$line=~s/\W+$//;
+	$line=~s/\s+/ /g;
 	next if ($line=~m/^(?:\*|show|$)/);
 	next if ($line=~m/^\#/);
 	$config{$line}=1;
     }
     $self->{'current_switch_config'}=\%config;
-
+    
     return (undef, sort keys %config);
 }
 
@@ -535,9 +541,12 @@ sub send_config_cmd {
     my $exp=$self->{'exp_obj'};
     my $prompt=$self->{'prompt'};
     
+    $exp->log_file($self->{'log_file'}) if ($self->{'debug_enable'} == 2);
+
     $exp->send("$cmd\n");
     my ($error, $output)=($exp->expect($timeout, $prompt))[1,3];
     unless ($error eq ''){
+	$exp->log_file(undef) if ($self->{'debug_enable'} == 2);
 	return "'$cmd' not set error: $error";
     }else{
 	my ($error, $result);
@@ -552,6 +561,7 @@ sub send_config_cmd {
 	    carp "Error message: $error\n\n";
 	}
     }
+    $exp->log_file(undef) if ($self->{'debug_enable'} == 2);
     return undef;
 }
 
