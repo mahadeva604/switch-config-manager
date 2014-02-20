@@ -502,7 +502,7 @@ sub set_lldp_setting{
     }
     
     my $system_name=$self->{'switch_ip'};
-    $system_name=~s/\./_/g;
+    $system_name=~s/\./\-/g;
     
     my @lldp_cmd_config;
     push (@lldp_cmd_config, "enable lldp");
