@@ -533,6 +533,76 @@ sub set_lldp_setting{
     return $error;
 }
 
+sub get_arp_table {
+    my $self=shift;
+    
+    my $exp=$self->{'exp_obj'};
+    $exp->send("show arpentry\n");
+    
+    my $arp_data_tmp;
+    my ($error, $arp_data)=($exp->expect(20,
+	['-re', 'All\s*$', sub {	my $new_exp = shift;
+					$arp_data_tmp=$new_exp->before;
+					$new_exp->send("a");
+					exp_continue_timeout; }],
+	$self->{'prompt'}
+    ))[1,3];
+
+    unless ($error eq ''){
+        return ("Command 'show arpentry' error: $error", undef);
+    }
+
+    $arp_data=$arp_data_tmp.$arp_data;
+    $arp_data=~s/[\x0a\x0d]+/\n/g;
+    my %arp_data;
+    foreach my $line (split("\n", $arp_data)){
+	if ($line=~/^\s*.+?\s+((?:\d+\.){3}\d+)\s+(.+?)\s+/){
+	    my $ip=$1;
+	    my $mac=$2;
+	    $mac=~s/-//g;
+	    $mac=~tr/A-F/a-f/;
+	    $arp_data{$ip}=$mac;
+	}
+    }
+    $self->{'arp_table'}=\%arp_data;
+    return (undef, %arp_data);
+}
+
+sub get_mac_table {
+    my $self=shift;
+    
+    my $exp=$self->{'exp_obj'};
+    $exp->send("show fdb\n");
+    
+    my $mac_data_tmp;
+    my ($error, $mac_data)=($exp->expect(20,
+	['-re', 'All\s*$', sub {	my $new_exp = shift;
+					$mac_data_tmp=$new_exp->before;
+					$new_exp->send("a");
+					exp_continue_timeout; }],
+	$self->{'prompt'}
+    ))[1,3];
+
+    unless ($error eq ''){
+        return ("Command 'show fdb' error: $error", undef);
+    }
+
+    $mac_data=$mac_data_tmp.$mac_data;
+    $mac_data=~s/[\x0a\x0d]+/\n/g;
+    my %mac_data;
+    foreach my $line (split("\n", $mac_data)){
+	if ($line=~/^\s*\d+\s+.+?\s+((?:[0-9A-F]{2}-){5}[0-9A-F]{2})\s+(.+?)\s+/){
+	    my $mac=$1;
+	    my $port=$2;
+	    $mac=~s/-//g;
+	    $mac=~tr/A-F/a-f/;
+	    push (@{$mac_data{$mac}}, $port);
+	}
+    }
+    $self->{'mac_table'}=\%mac_data;
+    return (undef, %mac_data);
+}
+
 sub send_config_cmd {
     my $self=shift;
     my $timeout=shift;
