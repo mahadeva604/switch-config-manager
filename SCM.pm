@@ -603,6 +603,41 @@ sub get_mac_table {
     return (undef, %mac_data);
 }
 
+sub get_lldp_neighbors {
+    my $self=shift;
+    
+    my $exp=$self->{'exp_obj'};
+    $exp->send("show lldp remote_ports\n");
+    
+    my $lldp_data_tmp;
+    my ($error, $lldp_data)=($exp->expect(20,
+	['-re', 'All\s*$', sub {	my $new_exp = shift;
+					$lldp_data_tmp=$new_exp->before;
+					$new_exp->send("a");
+					exp_continue_timeout; }],
+	$self->{'prompt'}
+    ))[1,3];
+
+    unless ($error eq ''){
+        return ("Command 'show lldp remote_ports' error: $error", undef);
+    }
+
+    $lldp_data=$lldp_data_tmp.$lldp_data;
+    $lldp_data=~s/[\x0a\x0d]+/\n/g;
+    my %lldp_data;
+    my $port;
+    foreach my $line (split("\n", $lldp_data)){
+	if ($line=~/^\s*Port\s+ID\s*:\s*(\d+)\s*$/){
+	    $port=$1;
+	}elsif($line=~/^\s*System\s+Name\s*:\s*(.+)/){
+	    $lldp_data{$port}->{'system_name'}=$1;
+	}
+    }
+    $self->{'lldp_neighbors'}=\%lldp_data;
+    return (undef, %lldp_data);
+}
+
+
 sub send_config_cmd {
     my $self=shift;
     my $timeout=shift;
