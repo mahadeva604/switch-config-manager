@@ -62,6 +62,58 @@ sub connect{
     return (undef, $self);
 }
 
+sub reconnect{
+    my $self=shift;
+
+    my $exp=$self->{'exp_obj'};
+    $exp->hard_close();
+    $exp=undef;
+
+    my $connect_type=$self->{'connect_type'};
+    my $error;
+
+    if ($connect_type eq 'console'){
+	$error=$self->console_connect();
+    }elsif($connect_type eq 'telnet'){
+	$error=$self->telnet_connect();
+    }elsif($connect_type eq 'ssh'){
+	$error=$self->ssh_connect();
+    }else{
+	carp "Not support connect type: $connect_type";
+	return (1, undef);
+    }
+    
+    if ($error){
+	carp $error;
+	return (1, undef);
+    }
+
+    $exp=$self->{'exp_obj'};
+
+    my ($error, $prompt)=($exp->expect(15,
+	[ 'Are you sure you want to continue connecting', 
+			sub {	my $new_exp = shift;
+	                        $new_exp->send("yes\n");
+	                        exp_continue_timeout; }],
+	[ qr/username:/i, sub {	my $new_exp = shift;
+				$new_exp->send("$self->{'username'}\n");
+	                    	exp_continue_timeout; }],
+	[ qr/password:/i, sub { my $new_exp = shift;
+	                        $new_exp->send("$self->{'password'}\n");
+	    	                exp_continue_timeout; }],
+	'#'
+    ))[1,3];
+    unless ($error eq ''){
+        carp "Can't authorize on switch $self->{'switch_ip'} connect_type $connect_type with user $self->{'username'}, error: $error";
+	return (2, undef);
+    }
+    $prompt=~s/[\x0a\x0d]+/\n/g;
+    my @prompt=split("\n", $prompt);
+    $prompt=$prompt[$#prompt].'#';
+    $self->{'prompt'}=$prompt;
+    $self->send_config_cmd(10, "disable clipaging");
+}
+
 sub telnet_connect {
     my $self=shift;
     
@@ -255,6 +307,8 @@ sub get_switch_info {
 	}
 	if ($line=~m/^\s*MAC\s+Address\s*:\s*(.+?)$/){
 	    $switch_info{'switch_mac'}=$1;
+	    $switch_info{'switch_mac'}=~s/-//g;
+	    $switch_info{'switch_mac'}=~tr/A-F/a-f/;
 	    next;
 	}
 	if ($line=~m/^\s*Firmware\s+Version\s*:\s*Build\s+(.+?)$/){
@@ -535,9 +589,18 @@ sub set_lldp_setting{
 
 sub get_arp_table {
     my $self=shift;
-    
+    my $ipaddr=shift;
+
+    my $cmd="show arpentry";
+    if ( defined $ipaddr ){
+	unless ($ipaddr=~m/^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/){
+	    carp "Uncorrect ip address: $ipaddr";
+	}else{
+	    $cmd.=" ipaddress $ipaddr";
+	}
+    }
     my $exp=$self->{'exp_obj'};
-    $exp->send("show arpentry\n");
+    $exp->send("$cmd\n");
     
     my $arp_data_tmp;
     my ($error, $arp_data)=($exp->expect(20,
@@ -570,9 +633,22 @@ sub get_arp_table {
 
 sub get_mac_table {
     my $self=shift;
+    my $macaddr=shift;
+
+    my $cmd="show fdb";
+    if ( defined $macaddr ){
+	my $macaddr_origin=$macaddr;
+	$macaddr=~s/[-:.]//g;
+	$macaddr=~tr/A-F/a-f/;
+	unless ($macaddr=~m/^[0-9a-f]{12}$/){
+	    carp "Uncorrect mac address: $macaddr_origin";
+	}else{
+	    $cmd.=" mac_address $macaddr";
+	}
+    }
     
     my $exp=$self->{'exp_obj'};
-    $exp->send("show fdb\n");
+    $exp->send("$cmd\n");
     
     my $mac_data_tmp;
     my ($error, $mac_data)=($exp->expect(20,
@@ -596,7 +672,7 @@ sub get_mac_table {
 	    my $port=$2;
 	    $mac=~s/-//g;
 	    $mac=~tr/A-F/a-f/;
-	    push (@{$mac_data{$mac}}, $port);
+	    $mac_data{$mac}->{$port}=1;
 	}
     }
     $self->{'mac_table'}=\%mac_data;
@@ -605,9 +681,18 @@ sub get_mac_table {
 
 sub get_lldp_neighbors {
     my $self=shift;
-    
+    my $port=shift;
+
+    my $cmd="show lldp remote_ports";
+    if ( defined $port ){
+	unless ($port=~m/^\d+$/){
+	    carp "Uncorrect switch port: $port";
+	}else{
+	    $cmd.=" $port";
+	}
+    }
     my $exp=$self->{'exp_obj'};
-    $exp->send("show lldp remote_ports\n");
+    $exp->send("$cmd\n");
     
     my $lldp_data_tmp;
     my ($error, $lldp_data)=($exp->expect(20,
