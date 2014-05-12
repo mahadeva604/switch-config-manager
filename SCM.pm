@@ -393,8 +393,9 @@ sub get_vlan_setting {
 
 sub set_vlan_setting {
     my $self=shift;
-    my %vlan_data=@_;
+    my %vlan_data_copy=@_;
     
+    my %vlan_data=%{(dclone(\%vlan_data_copy))};
     my %vlan_data_current;
     
     if (exists $self->{'vlan_data_current'}){

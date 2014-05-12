@@ -91,6 +91,8 @@ while (my $switch_ip = shift @switch_ip){
 
 	    &PrintLog("ERROR: $switch_ip can't find mac address of $end_switch_ip",1) && exit unless (defined $end_switch_mac);
 	    
+# Get uplink of previous switch
+
 	    if (defined (my $prev_switch=$switch_path[-2])){
 		($error, my %mac_table)=$scm->get_mac_table($switch_data{$prev_switch}->{'mac_addr'});
 		&PrintLog("ERROR: $switch_ip get_mac_table() $error",1) && exit if (defined $error);
@@ -109,12 +111,22 @@ while (my $switch_ip = shift @switch_ip){
 		&PrintLog("ERROR: $switch_ip Find few uplink port for mac address $end_switch_mac",1) && exit if ((scalar keys %uplink_port) > 1);
 		push (@{$switch_data{$switch_ip}->{'uplinks'}}, keys %uplink_port);
 	    }
-	
+
 	    if ($switch_ip ne $end_switch_ip){
 		($error, my %mac_table)=$scm->get_mac_table($end_switch_mac);
 		&PrintLog("ERROR: $switch_ip get_mac_table() $error",1) && exit if (defined $error);
+		
+		my %uplink_port;
+		
+		unless (defined $mac_table{$end_switch_mac}){
+		    $scm->send_config_cmd(10, "ping $end_switch_ip times 3");
+		    ($error, %mac_table)=$scm->get_mac_table($end_switch_mac);
+		    &PrintLog("ERROR: $switch_ip get_mac_table() $error",1) && exit if (defined $error);
+		    %uplink_port=%{$mac_table{$end_switch_mac}};
+		}else{
+		    %uplink_port=%{$mac_table{$end_switch_mac}};
+		}
 
-		my %uplink_port=%{$mac_table{$end_switch_mac}};
 		&PrintLog("ERROR: $switch_ip can't find uplink port for mac address $end_switch_mac",1) && exit if ((scalar keys %uplink_port) == 0);
 		&PrintLog("ERROR: $switch_ip Find few uplink port for mac address $end_switch_mac",1) && exit if ((scalar keys %uplink_port) > 1);
 		
@@ -155,7 +167,7 @@ foreach my $switch_ip (@switch_path){
     
     ($error, my %vlan_data_after_setting)=$scm->set_vlan_setting(%{$switch_data{$switch_ip}->{'vlan_data_new'}});
     &PrintLog("ERROR: Can't setting up vlans on $switch_ip $error", 1) && exit if (defined $error);
-    &PrintLog("ERROR: $switch_ip vlans not setting up") && exit unless(Compare(\%vlan_data_after_setting, $switch_data{$switch_ip}->{'vlan_data_new'}));
+    &PrintLog("ERROR: $switch_ip vlans not setting up", 1) && exit unless(Compare(\%vlan_data_after_setting, $switch_data{$switch_ip}->{'vlan_data_new'}));
     
     $scm->send_config_cmd(10,"enable clipaging");
     $error=$scm->send_config_cmd(60, "save");
