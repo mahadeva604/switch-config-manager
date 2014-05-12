@@ -153,6 +153,11 @@ foreach my $switch_ip (@switch_path){
 	$scm->reconnect();
     }
     
+    ($error, my %vlan_data_after_setting)=$scm->set_vlan_setting(%{$switch_data{$switch_ip}->{'vlan_data_new'}});
+    &PrintLog("ERROR: Can't setting up vlans on $switch_ip $error", 1) && exit if (defined $error);
+    &PrintLog("ERROR: $switch_ip vlans not setting up") && exit unless(Compare(\%vlan_data_after_setting, $switch_data{$switch_ip}->{'vlan_data_new'}));
+    
+    $scm->send_config_cmd(10,"enable clipaging");
     $error=$scm->send_config_cmd(60, "save");
     &PrintLog("ERROR: Can't save config on $switch_ip $error", 1) && exit if (defined $error);
 }
