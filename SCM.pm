@@ -366,6 +366,7 @@ sub get_vlan_setting {
 	    $vlan_id=$1;
 	    $vlan_name=$2;
 	    $vlan_data_current{$vlan_id}->{'name'}=$vlan_name;
+	    $vlan_data_current{$vlan_id}->{'ports'}={} unless (exists $vlan_data_current{$vlan_id}->{'ports'});
 	}
 	if ($line=~m/^(?:Current\s+Tagged|Tagged)\s+[Pp]orts\s*:\s+(.+?)\s*$/){
 	    $vlan_tagged=$1;
