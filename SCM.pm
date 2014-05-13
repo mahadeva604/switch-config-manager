@@ -714,7 +714,7 @@ sub get_lldp_neighbors {
     my %lldp_data;
     my $port;
     foreach my $line (split("\n", $lldp_data)){
-	if ($line=~/^\s*Port\s+ID\s*:\s*(\d+)\s*$/){
+	if ($line=~/^Port\s+ID\s*:\s*(\d+)\s*$/){
 	    $port=$1;
 	}elsif($line=~/^\s*System\s+Name\s*:\s*(.+)/){
 	    $lldp_data{$port}->{'system_name'}=$1;

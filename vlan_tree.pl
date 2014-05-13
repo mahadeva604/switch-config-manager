@@ -120,8 +120,13 @@ while (my $switch_ip = shift @switch_ip){
 		
 		unless (defined $mac_table{$switch_data{$prev_switch}->{'mac_addr'}}){
 		    $scm->send_config_cmd(10, "ping $prev_switch times 3");
-		    ($error, %mac_table)=$scm->get_mac_table($switch_data{$prev_switch}->{'mac_addr'});
-		    &PrintLog("ERROR: $switch_ip get_mac_table() $error",1) && exit if (defined $error);
+		    for (1..7){
+			($error, %mac_table)=$scm->get_mac_table($switch_data{$prev_switch}->{'mac_addr'});
+			&PrintLog("ERROR: $switch_ip get_mac_table() $error",1) && exit if (defined $error);
+			last if (defined $mac_table{$switch_data{$prev_switch}->{'mac_addr'}});
+			sleep 1;
+		    }
+		    &PrintLog("ERROR: Can't get mac table",1) && exit unless (defined $mac_table{$switch_data{$prev_switch}->{'mac_addr'}});
 		    %uplink_port=%{$mac_table{$switch_data{$prev_switch}->{'mac_addr'}}};
 		}else{
 		    %uplink_port=%{$mac_table{$switch_data{$prev_switch}->{'mac_addr'}}};
