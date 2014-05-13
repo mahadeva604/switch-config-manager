@@ -40,23 +40,34 @@ my @switch_path;
 
 while (my $switch_ip = shift @switch_ip){
 
+	print "Connecting to switch ($switch_ip):";
+
 	my $scm=connect_to_switch($switch_ip);
 	push (@switch_path, $switch_ip);
 
 	if (defined $scm){
 	    my $error;
 	    
+	    print "\tOK\n";
+
 	    $switch_data{$switch_ip}->{'scm'}=$scm;
 	    
 	    $error=$scm->send_config_cmd(10,"disable gvrp");
 	    &PrintLog("ERROR: send_config_cmd(\"disable gvrp\") $error",1) && exit if (defined $error);
 	    
+	    print "Get switch info ($switch_ip):";
+
 	    my ($error, %switch_info)=$scm->get_switch_info();
 	    &PrintLog("ERROR: get_switch_info() $error",1) && exit if (defined $error);
 	    $switch_data{$switch_ip}->{'mac_addr'}=$switch_info{'switch_mac'};
 	    
+	    print "\tOK\n";
+	    
 	    my $must_be_system_name=$switch_ip;
 	    $must_be_system_name=~s/\./-/g;
+	    
+	    print "Check system name ($switch_ip):";
+	    
 	    if ($must_be_system_name ne $switch_info{'system_name'}){
 		
 		$error=$scm->send_config_cmd(10, "config snmp system_name $must_be_system_name");
@@ -69,7 +80,11 @@ while (my $switch_ip = shift @switch_ip){
 		exit;
 	    }
 
+	    print "\tOK\n";
+	    
 	    my $end_switch_mac;
+	    
+	    print "Get arp table ($switch_ip):";
 	    
 	    unless (defined $switch_data{$end_switch_ip}->{'mac_addr'}){
 		($error, my %arp_table)=$scm->get_arp_table($end_switch_ip);
@@ -91,7 +106,11 @@ while (my $switch_ip = shift @switch_ip){
 
 	    &PrintLog("ERROR: $switch_ip can't find mac address of $end_switch_ip",1) && exit unless (defined $end_switch_mac);
 	    
+	    print "\tOK\n";
+	    
 # Get uplink of previous switch
+
+	    print "Get uplinks ($switch_ip):";
 
 	    if (defined (my $prev_switch=$switch_path[-2])){
 		($error, my %mac_table)=$scm->get_mac_table($switch_data{$prev_switch}->{'mac_addr'});
@@ -145,7 +164,14 @@ while (my $switch_ip = shift @switch_ip){
 		unshift (@switch_ip, $next_switch_ip) if ($next_switch_ip ne $end_switch_ip);
 	    }
 	    
+	    print "\tOk\n";
+	    
+	    print "Check vlan settings ($switch_ip):";
+	    
 	    my $vlan_data_new_ref=&check_vlan_setting(\$switch_data{$switch_ip}, $ports{$switch_ip}, \%vlans);
+	    
+	    print "\tOK\n";
+	    
 	    $switch_data{$switch_ip}->{'vlan_data_new'}=$vlan_data_new_ref;
 	}
 }
@@ -155,7 +181,7 @@ foreach my $switch_ip (@switch_path){
 
 # Check connection
 
-    my $error=$scm->send_config_cmd(10,"disable clipaging");
+    my $error=$scm->send_config_cmd(10,"enable clipaging");
     my $error_code=(split(/\s+/,$error))[-1];
 
 # Reconnect
@@ -164,12 +190,19 @@ foreach my $switch_ip (@switch_path){
 	&PrintLog("Warning: reconnect to $switch_ip", 1);
 	$scm->reconnect();
     }
+
+    print "Vlan setting ($switch_ip):";
+
+    unless (Compare($switch_data{$switch_ip}->{'vlan_data_new'}, $scm->{'vlan_data_current'})){ 
+
+	($error, my %vlan_data_after_setting)=$scm->set_vlan_setting(%{$switch_data{$switch_ip}->{'vlan_data_new'}});
+	&PrintLog("ERROR: Can't setting up vlans on $switch_ip $error", 1) && exit if (defined $error);
+        &PrintLog("ERROR: $switch_ip vlans not setting up", 1) && exit unless(Compare(\%vlan_data_after_setting, $switch_data{$switch_ip}->{'vlan_data_new'}));
+	print "\tOK\n";
+    }else{
+	print "\tNothing to setting\n";
+    }
     
-    ($error, my %vlan_data_after_setting)=$scm->set_vlan_setting(%{$switch_data{$switch_ip}->{'vlan_data_new'}});
-    &PrintLog("ERROR: Can't setting up vlans on $switch_ip $error", 1) && exit if (defined $error);
-    &PrintLog("ERROR: $switch_ip vlans not setting up", 1) && exit unless(Compare(\%vlan_data_after_setting, $switch_data{$switch_ip}->{'vlan_data_new'}));
-    
-    $scm->send_config_cmd(10,"enable clipaging");
     $error=$scm->send_config_cmd(60, "save");
     &PrintLog("ERROR: Can't save config on $switch_ip $error", 1) && exit if (defined $error);
 }
