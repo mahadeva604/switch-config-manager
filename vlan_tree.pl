@@ -178,6 +178,9 @@ while (my $switch_ip = shift @switch_ip){
 	    print "\tOK\n";
 	    
 	    $switch_data{$switch_ip}->{'vlan_data_new'}=$vlan_data_new_ref;
+	}else{
+	    &PrintLog("ERROR: Can't connect to $switch_ip",1);
+	    exit;
 	}
 }
 
